@@ -14,6 +14,9 @@ Public Class Form1
 
     Private isCharging As Boolean
     Private isJumping As Boolean
+    Private isKeyboardCharging As Boolean
+    Private isLeftHeld As Boolean
+    Private isRightHeld As Boolean
     Private chargeStartedAt As Long
     Private jumpStartedAt As Long
 
@@ -60,7 +63,7 @@ Public Class Form1
 
         statusLabel.Dock = DockStyle.Fill
         statusLabel.TextAlign = ContentAlignment.MiddleLeft
-        statusLabel.Text = "左右方向鍵移動；按住按鈕或空白鍵蓄力，放開後起跳。"
+        statusLabel.Text = "按住空白鍵蓄力，放開時按方向鍵斜跳；按鈕起跳為垂直跳。"
         statusLabel.AutoEllipsis = True
 
         chargeBar.Dock = DockStyle.Fill
@@ -89,25 +92,27 @@ Public Class Form1
 
     Private Sub JumpButtonMouseDown(sender As Object, e As MouseEventArgs)
         If e.Button = MouseButtons.Left Then
-            BeginCharge()
+            BeginCharge(False)
         End If
     End Sub
 
     Private Sub JumpButtonMouseUp(sender As Object, e As MouseEventArgs)
         If e.Button = MouseButtons.Left Then
-            BeginJump()
+            BeginJump(0)
         End If
     End Sub
 
     Protected Overrides Function ProcessDialogKey(keyData As Keys) As Boolean
         Dim keyCode = keyData And Keys.KeyCode
         If keyCode = Keys.Left Then
-            If Not isJumping Then
+            isLeftHeld = True
+            If Not isJumping AndAlso Not isCharging Then
                 scene.MoveCharacter(-1, MovementStepPixels)
             End If
             Return True
         ElseIf keyCode = Keys.Right Then
-            If Not isJumping Then
+            isRightHeld = True
+            If Not isJumping AndAlso Not isCharging Then
                 scene.MoveCharacter(1, MovementStepPixels)
             End If
             Return True
@@ -118,53 +123,71 @@ Public Class Form1
 
     Private Sub FormKeyDown(sender As Object, e As KeyEventArgs)
         If e.KeyCode = Keys.Space Then
-            BeginCharge()
+            BeginCharge(True)
             e.Handled = True
         End If
     End Sub
 
     Private Sub FormKeyUp(sender As Object, e As KeyEventArgs)
-        If e.KeyCode = Keys.Space Then
-            BeginJump()
+        If e.KeyCode = Keys.Left Then
+            isLeftHeld = False
+            e.Handled = True
+        ElseIf e.KeyCode = Keys.Right Then
+            isRightHeld = False
+            e.Handled = True
+        ElseIf e.KeyCode = Keys.Space Then
+            BeginJump(If(isKeyboardCharging, GetHeldJumpDirection(), 0))
             e.Handled = True
         End If
     End Sub
 
     Private Sub FormDeactivate(sender As Object, e As EventArgs)
         If isCharging Then
-            BeginJump()
+            BeginJump(If(isKeyboardCharging, GetHeldJumpDirection(), 0))
         End If
+        isLeftHeld = False
+        isRightHeld = False
     End Sub
 
-    Private Sub BeginCharge()
+    Private Sub BeginCharge(allowDirectionalJump As Boolean)
         If isCharging OrElse isJumping OrElse Not jumpButton.Enabled Then
             Return
         End If
 
         isCharging = True
+        isKeyboardCharging = allowDirectionalJump
         chargeStartedAt = Stopwatch.GetTimestamp()
         chargeBar.Value = 0
         jumpButton.Text = "蓄力中…放開起跳"
-        statusLabel.Text = "蓄力中：按得越久，跳得越高。"
+        statusLabel.Text = If(isKeyboardCharging, "蓄力中：方向鍵選方向，放開空白鍵起跳。", "蓄力中：按得越久，跳得越高。")
         animationTimer.Start()
     End Sub
 
-    Private Sub BeginJump()
+    Private Sub BeginJump(horizontalDirection As Integer)
         If Not isCharging Then
             Return
         End If
 
         Dim chargeRatio = CSng(Math.Min(1.0, GetElapsedMilliseconds(chargeStartedAt) / MaximumChargeMilliseconds))
         isCharging = False
+        isKeyboardCharging = False
         isJumping = True
         jumpStartedAt = Stopwatch.GetTimestamp()
         chargeBar.Value = CInt(Math.Round(chargeRatio * 100.0F))
-        scene.StartJump(chargeRatio)
+        scene.StartJump(chargeRatio, horizontalDirection)
         jumpButton.Enabled = False
         jumpButton.Text = "跳躍中…"
         statusLabel.Text = $"蓄力 {chargeBar.Value}%！"
         animationTimer.Start()
     End Sub
+
+    Private Function GetHeldJumpDirection() As Integer
+        If isLeftHeld = isRightHeld Then
+            Return 0
+        End If
+
+        Return If(isLeftHeld, -1, 1)
+    End Function
 
     Private Sub AnimationTimerTick(sender As Object, e As EventArgs)
         If isCharging Then
@@ -185,7 +208,7 @@ Public Class Form1
             scene.EndJump()
             jumpButton.Enabled = True
             jumpButton.Text = "按住蓄力"
-            statusLabel.Text = "跳完了！方向鍵可移動，按住蓄力再跳一次。"
+            statusLabel.Text = "跳完了！方向鍵可移動；按住空白鍵並按方向鍵斜跳。"
             animationTimer.Stop()
             Return
         End If
@@ -201,9 +224,13 @@ End Class
 Friend Class JumpScene
     Inherits Panel
 
+    Private Const MaximumHorizontalJumpDistance As Single = 100.0F
+
     Private jumpProgress As Single
     Private jumpHeight As Single
     Private characterX As Single = -1.0F
+    Private jumpStartX As Single
+    Private jumpHorizontalDistance As Single
 
     Public Sub New()
         DoubleBuffered = True
@@ -211,21 +238,40 @@ Friend Class JumpScene
         BackColor = Color.FromArgb(190, 229, 250)
     End Sub
 
-    Public Sub StartJump(chargeRatio As Single)
+    Public Sub StartJump(chargeRatio As Single, horizontalDirection As Integer)
         Dim availableHeight = Math.Max(30.0F, Math.Min(190.0F, CSng(ClientSize.Height) - 165.0F))
         jumpHeight = 30.0F + Math.Max(0.0F, Math.Min(1.0F, chargeRatio)) * (availableHeight - 30.0F)
+        If characterX < 0.0F Then
+            characterX = CSng(Width) / 2.0F
+        End If
+
+        Dim minimumX = 30.0F
+        Dim maximumX = Math.Max(minimumX, CSng(Width) - 30.0F)
+        characterX = Math.Max(minimumX, Math.Min(maximumX, characterX))
+        jumpStartX = characterX
+        If horizontalDirection < 0 Then
+            jumpHorizontalDistance = -Math.Min(MaximumHorizontalJumpDistance, jumpStartX - minimumX)
+        ElseIf horizontalDirection > 0 Then
+            jumpHorizontalDistance = Math.Min(MaximumHorizontalJumpDistance, maximumX - jumpStartX)
+        Else
+            jumpHorizontalDistance = 0.0F
+        End If
+
         jumpProgress = 0.0F
         Invalidate()
     End Sub
 
     Public Sub SetJumpProgress(progress As Single)
         jumpProgress = Math.Max(0.0F, Math.Min(1.0F, progress))
+        characterX = jumpStartX + jumpHorizontalDistance * jumpProgress
         Invalidate()
     End Sub
 
     Public Sub EndJump()
+        characterX = jumpStartX + jumpHorizontalDistance
         jumpProgress = 0.0F
         jumpHeight = 0.0F
+        jumpHorizontalDistance = 0.0F
         Invalidate()
     End Sub
 
