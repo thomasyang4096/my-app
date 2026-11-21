@@ -4,6 +4,7 @@ Imports System.Drawing.Drawing2D
 Public Class Form1
     Private Const MaximumChargeMilliseconds As Double = 1500
     Private Const JumpDurationMilliseconds As Double = 850
+    Private Const MovementStepPixels As Single = 12.0F
 
     Private ReadOnly scene As New JumpScene()
     Private ReadOnly chargeBar As New ProgressBar()
@@ -59,7 +60,7 @@ Public Class Form1
 
         statusLabel.Dock = DockStyle.Fill
         statusLabel.TextAlign = ContentAlignment.MiddleLeft
-        statusLabel.Text = "按住按鈕蓄力，放開後小人會起跳。"
+        statusLabel.Text = "左右方向鍵移動；按住按鈕或空白鍵蓄力，放開後起跳。"
         statusLabel.AutoEllipsis = True
 
         chargeBar.Dock = DockStyle.Fill
@@ -97,6 +98,23 @@ Public Class Form1
             BeginJump()
         End If
     End Sub
+
+    Protected Overrides Function ProcessDialogKey(keyData As Keys) As Boolean
+        Dim keyCode = keyData And Keys.KeyCode
+        If keyCode = Keys.Left Then
+            If Not isJumping Then
+                scene.MoveCharacter(-1, MovementStepPixels)
+            End If
+            Return True
+        ElseIf keyCode = Keys.Right Then
+            If Not isJumping Then
+                scene.MoveCharacter(1, MovementStepPixels)
+            End If
+            Return True
+        End If
+
+        Return MyBase.ProcessDialogKey(keyData)
+    End Function
 
     Private Sub FormKeyDown(sender As Object, e As KeyEventArgs)
         If e.KeyCode = Keys.Space Then
@@ -167,7 +185,7 @@ Public Class Form1
             scene.EndJump()
             jumpButton.Enabled = True
             jumpButton.Text = "按住蓄力"
-            statusLabel.Text = "跳完了！再按住蓄力挑戰更高。"
+            statusLabel.Text = "跳完了！方向鍵可移動，按住蓄力再跳一次。"
             animationTimer.Stop()
             Return
         End If
@@ -185,6 +203,7 @@ Friend Class JumpScene
 
     Private jumpProgress As Single
     Private jumpHeight As Single
+    Private characterX As Single = -1.0F
 
     Public Sub New()
         DoubleBuffered = True
@@ -207,6 +226,17 @@ Friend Class JumpScene
     Public Sub EndJump()
         jumpProgress = 0.0F
         jumpHeight = 0.0F
+        Invalidate()
+    End Sub
+
+    Public Sub MoveCharacter(direction As Integer, distance As Single)
+        If characterX < 0.0F Then
+            characterX = CSng(Width) / 2.0F
+        End If
+
+        Dim minimumX = 30.0F
+        Dim maximumX = Math.Max(minimumX, CSng(Width) - 30.0F)
+        characterX = Math.Max(minimumX, Math.Min(maximumX, characterX + direction * distance))
         Invalidate()
     End Sub
 
@@ -233,7 +263,13 @@ Friend Class JumpScene
         End Using
 
         Dim bounce = CSng(Math.Sin(Math.PI * jumpProgress)) * jumpHeight
-        Dim centerX = Width \ 2
+        If characterX < 0.0F Then
+            characterX = CSng(Width) / 2.0F
+        End If
+
+        Dim maximumX = Math.Max(30.0F, CSng(Width) - 30.0F)
+        characterX = Math.Max(30.0F, Math.Min(maximumX, characterX))
+        Dim centerX = CInt(characterX)
         Dim feetY = CSng(floorY) - bounce
         Dim headTop = feetY - 103.0F
 
